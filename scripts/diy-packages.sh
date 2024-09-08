@@ -13,6 +13,6 @@ git clone --depth=1 https://github.com/kenzok8/openwrt-packages.git
 rm -rf openwrt-packages/luci-app-mosdns
 rm -rf openwrt-packages/mosdns
 
-git clone -b v5 https://github.com/sbwml/luci-app-mosdns.git
+git clone -b v5-lua https://github.com/sbwml/luci-app-mosdns.git
 
 popd
