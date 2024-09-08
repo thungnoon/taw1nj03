@@ -37,6 +37,10 @@ git clone -b main --depth 1 https://github.com/xiaorouji/openwrt-passwall2.git
 git clone -b v5-lua --depth 1 https://github.com/sbwml/luci-app-mosdns.git
 #openclash
 git clone -b master --depth 1 https://github.com/vernesong/OpenClash.git
+#msd_lite
+git clone -b master --depth=1 https://github.com/ximiTech/luci-app-msd_lite.git
+git clone -b master --depth=1 https://github.com/ximiTech/msd_lite.git
+
 
 popd
 
