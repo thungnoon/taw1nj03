@@ -44,3 +44,4 @@ git clone -b main --depth=1 https://github.com/ximiTech/msd_lite.git
 
 popd
 
+echo "packages executed successfully!"
