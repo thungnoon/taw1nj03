@@ -203,8 +203,6 @@ jobs:
         rm -rf *.bin
         rm -rf *.buildinfo 
         rm -rf *.json 
-        rm -rf *.vdi
-        rm -rf *.vmdk
         rm -rf *rootfs.img.gz
         rm -rf sha256sums
         rm -rf *.manifest 
