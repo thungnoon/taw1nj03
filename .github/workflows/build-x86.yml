@@ -1,212 +1,238 @@
-#=================================================
+#
+# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
+#
+# This is free software, licensed under the MIT License.
+# See /LICENSE for more information.
+#
 # https://github.com/P3TERX/Actions-OpenWrt
 # Description: Build OpenWrt using GitHub Actions
-# Lisence: MIT
-# Author: P3TERX
-# Blog: https://p3terx.com
-#=================================================
+#
 
-name: OpenWrt_immortalwrt_6.12
+name: build-x86
+
+permissions: write-all
+#开启写权限，防止无法上传到release
 
 on:
   repository_dispatch:
   workflow_dispatch:
   schedule:
-    - cron: 11 23 */4 * * 
-  watch:
-     types: started
-
+   - cron: 0 20 * * 4
+   #      分,时,日,月,星期。每周五 20时执行一次 (UTC时间)
+  
 env:
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  FREE_DISK_SH: scripts/free_disk_space.sh
+  ENV_SH: scripts/environment.sh
+  REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
-  CONFIG_FILE: configs/immortalwrt/immortalwrt.config
-  DIY_SH: scripts/immortalwrt_6.12/immortalwrt.sh
+  CONFIG_FILE: configs/packages-x86.txt
+  CONFIG_5G: configs/packages-5G.txt
+  CONFIG_STORAGE: configs/storage.txt
+  SETTINGS_SH: scripts/init-settings.sh
+  PACKAGES_SH: scripts/packages.sh
+  INSTALL5G_SH: scripts/install-5G.sh
+  CLASH_CORE_SH: scripts/preset-clash-core-amd64.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: false
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
 jobs:
-  Build:
-    runs-on: ubuntu-latest
-    outputs:
-      OPENWRTROOT: ${{ steps.update.outputs.OPENWRTROOT }}
-      PLATFORM: ${{ steps.compile.outputs.PLATFORM }}
-      TARGET: ${{ steps.compile.outputs.TARGET }}
-      SUBTARGET: ${{ steps.compile.outputs.SUBTARGET }}
-      FIRMWARE: ${{ steps.compile.outputs.FIRMWARE }}
-      GENERATE_STATUS: ${{ steps.generate.outputs.GENERATE_STATUS }}
+  build:
+    runs-on: ubuntu-24.04
 
     steps:
-    - name: Maximize build space
-      uses: easimon/maximize-build-space@master
-      with:
-        root-reserve-mb: 512
-        swap-size-mb: 1024
-        remove-dotnet: 'true'
+    - name: 检查
+      uses: actions/checkout@main
 
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Initialization Environment
+    - name: 初始化环境
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        echo -e "Total CPU cores\t: $(nproc)"
-        cat /proc/cpuinfo | grep 'model name'
-        free -h
-        uname -a
-        [ -f /proc/version ] && cat /proc/version
-        [ -f /etc/issue.net ] && cat /etc/issue.net
-        [ -f /etc/issue ] && cat /etc/issue
-        ulimit -a
-        
-    - name: Clone Source Code
-      run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        chmod +x $FREE_DISK_SH && $FREE_DISK_SH
+        sudo -E apt-get -qq update -y
+        sudo -E apt-get -qq full-upgrade -y
+        chmod +x $ENV_SH && $ENV_SH
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo timedatectl set-timezone "$TZ"
+        docker image prune -a -f
+        docker container prune -f
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+    - name: 检查空间使用情况1
+      if: (!cancelled())
+      run: df -hT
 
-    - name: Update Feeds
-      id: update
+    - name: 克隆源码
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL --depth 1 -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        cd openwrt
+    - name: 开启缓存
+      uses: klever1988/cachewrtbuild@main
+      with:
+        ccache: 'true'
+        mixkey: 'x86'
+        prefix: ${{ github.workspace }}/openwrt
+
+    - name: 安装 feeds
       run: |
         cd openwrt
-        echo "OPENWRTROOT=$PWD" >> $GITHUB_ENV
-        echo "OPENWRTROOT=$PWD" >> $GITHUB_OUTPUT
-        mkdir customfeeds
-        git clone --depth=1 https://github.com/xuanranran/openwrt-package customfeeds/lovepackages
-        git clone --depth=1 https://github.com/xuanranran/rely customfeeds/loverely
-        git clone --depth=1 https://github.com/immortalwrt/packages -b $REPO_BRANCH customfeeds/packages
-        git clone --depth=1 https://github.com/immortalwrt/luci -b $REPO_BRANCH customfeeds/luci
-        git clone --depth=1 https://github.com/openwrt/routing -b $REPO_BRANCH customfeeds/routing
-        git clone --depth=1 https://github.com/openwrt/telephony -b $REPO_BRANCH customfeeds/telephony
-        chmod +x ../scripts/*.sh
-        chmod +x ../scripts/immortalwrt_6.12/*.sh
-        ../scripts/immortalwrt_6.12/hook-package00.sh
-        ../scripts/immortalwrt_6.12/hook-package01.sh
-        ../scripts/immortalwrt_6.12/hook-base.sh
-        ../scripts/immortalwrt_6.12/hook-feeds.sh
-        
-    - name: Install Feeds
-      run: |
-        cd $OPENWRTROOT
+        ./scripts/feeds update -a
         ./scripts/feeds install -a
-
-    - name: Load Custom Configuration
+    - name: 执行脚本
       run: |
-        [ -e files ] && mv files $OPENWRTROOT/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE $OPENWRTROOT/.config
-        chmod +x scripts/*.sh
-        cd $OPENWRTROOT
-        ../$DIY_SH
-        ../scripts/preset-clash-core.sh amd64
-        ../scripts/preset-nikki-core.sh amd64
-        ../scripts/preset-terminal-tools.sh
+        cd openwrt
+        chmod +x $GITHUB_WORKSPACE/$INSTALL5G_SH && $GITHUB_WORKSPACE/$INSTALL5G_SH
+        chmod +x $GITHUB_WORKSPACE/$SETTINGS_SH && $GITHUB_WORKSPACE/$SETTINGS_SH
+        chmod +x $GITHUB_WORKSPACE/$PACKAGES_SH && $GITHUB_WORKSPACE/$PACKAGES_SH
+        chmod +x $GITHUB_WORKSPACE/$CLASH_CORE_SH && $GITHUB_WORKSPACE/$CLASH_CORE_SH
+    - name: 导入补丁和配置 & 下载文件
+      run: |
+        [ -d files ] && mv files openwrt/files || echo "files not found"
+        [ -f $CONFIG_FILE ] && cat $CONFIG_FILE >> openwrt/.config
+        [ -f $CONFIG_5G ] && cat $CONFIG_5G >> openwrt/.config
+        [ -f $CONFIG_STORAGE ] && cat $CONFIG_STORAGE >> openwrt/.config
+        cd openwrt
         make defconfig
-        
-    - name: Download Package
-      id: package
-      run: |
-        cd $OPENWRTROOT
-        cat .config
-        sed -i 's/rtl8152-vendor=y/rtl8152-vendor=m/g' .config
-        make download -j$(nproc)
+        make download -j8 V=10
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-  
-    - name: Compile Packages
-      id: compile
+    - name: 空间使用情况2
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 编译工具链
+      id: mtools
       run: |
-        cd $OPENWRTROOT
-        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        echo -e "$(nproc) thread compile"
-        make tools/compile -j$(nproc) || make tools/compile -j$(nproc) || make tools/compile -j1 IGNORE_ERRORS=1 V=s
-        make toolchain/compile -j$(nproc) || make toolchain/compile -j$(nproc) || make toolchain/compile -j1 IGNORE_ERRORS=1 V=s
-        make target/compile -j$(nproc) || make target/compile -j$(nproc) IGNORE_ERRORS=1 || make target/compile -j1 IGNORE_ERRORS=1 V=s
-        make diffconfig
-        make package/compile -j$(nproc) IGNORE_ERRORS=1 || make package/compile -j$(nproc) IGNORE_ERRORS=1
+        cd openwrt
+        echo -e "$(($(nproc)+1)) thread compile"
+        make tools/compile -j$(($(nproc)+1)) || make tools/compile -j1 V=s
+        make toolchain/compile -j$(($(nproc)+1)) || make toolchain/compile -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 空间使用情况3_1
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 清除工具链编译中间产物...
+      if: steps.mtools.outputs.status == 'success'
+      run: |
+        cd openwrt
+        rm -rf dl/*
+        rm -rf build_dir/host/*
+        rm -rf build_dir/toolchain-*
+    - name: 空间使用情况3_2
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 编译内核
+      id: mkernel
+      if: steps.mtools.outputs.status == 'success'
+      run: |
+        cd openwrt
+        echo -e "$(($(nproc)+1)) thread compile"
+        make target/linux/compile -j$(($(nproc)+1)) || make target/linux/compile -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 空间使用情况4
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 编译插件
+      id: mpackage
+      if: steps.mkernel.outputs.status == 'success'
+      run: |
+        cd openwrt
+        echo -e "$(($(nproc)+1)) thread compile"
+        make package/compile -j$(($(nproc)+1)) || make package/compile -j1 V=s
         make package/index
-        cd $OPENWRTROOT/bin/packages/*
-        PLATFORM=$(basename `pwd`)
-        echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-        echo "PLATFORM=$PLATFORM" >> $GITHUB_OUTPUT
-        cd $OPENWRTROOT/bin/targets/*
-        TARGET=$(basename `pwd`)
-        echo "TARGET=$TARGET" >> $GITHUB_ENV
-        echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
-        cd *
-        SUBTARGET=$(basename `pwd`)
-        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "FIRMWARE=$PWD" >> $GITHUB_OUTPUT
-        echo "COMPILE_STATUS=success" >> $GITHUB_OUTPUT
-
-    - name: Generate Firmware
-      if: steps.compile.outputs.COMPILE_STATUS == 'success'
-      id: generate
-      run: |
-        cd $OPENWRTROOT
-        mkdir -p files/etc/uci-defaults/
-        cp ../scripts/immortalwrt/snapshots-init-settings.sh files/etc/uci-defaults/99-init-settings
-        mkdir -p files/etc/apk/repositories.d 
-        cp ../configs/apk/openwrt-repositories-snapshots.conf files/etc/apk/repositories
-        cp ../configs/apk/openwrt-repositories-snapshots.conf files/etc/apk/repositories.d/distfeeds.list
         make package/install -j$(nproc) || make package/install -j1 V=s
-        make target/install -j$(nproc) || make target/install -j1 V=s
-        # pushd bin/targets/x86/64
-        # rm -rf immortalwrt-x86-64-generic-kernel.bin
-        # rm -rf immortalwrt-x86-64-generic-rootfs.tar.gz
-        # rm -rf immortalwrt-x86-64-generic-squashfs-combined-efi.vhdx
-        # rm -rf immortalwrt-x86-64-generic-squashfs-combined-efi.vmdk
-        # rm -rf immortalwrt-x86-64-generic-squashfs-combined.img.gz
-        # rm -rf immortalwrt-x86-64-generic-squashfs-combined.vhdx
-        # rm -rf immortalwrt-x86-64-generic-squashfs-combined.vmdk
-        # rm -rf immortalwrt-x86-64-generic-squashfs-rootfs.img.gz
-        # mv immortalwrt-x86-64-generic-squashfs-combined-efi.img.gz $(date +"%Y.%m.%d")-immortalwrt-x86-64-squashfs-efi.img.gz
-        # mv config.buildinfo $(date +"%Y.%m.%d")-immortalwrt-config.buildinfo
-        # popd
-        make checksum
-        # mv bin/targets/x86/64/sha256sums bin/targets/x86/64/$(date +"%Y.%m.%d")-immortalwrt-sha256sums
-        echo "GENERATE_STATUS=success" >> $GITHUB_OUTPUT
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 空间使用情况5
+      if: (!cancelled())
+      run: df -hT
 
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+    - name: 清除插件编译文件
+      id: cpackage
+      if: steps.mpackage.outputs.status == 'success'
       run: |
-          echo "release_tag=$(date +"%Y.%m.%d")-immortalwrt3" >> $GITHUB_OUTPUT
-          echo "release_date=$(date "+%Y年%m月%d日")" >> $GITHUB_OUTPUT
-          touch release.txt
-          echo -e "**📥固件说明**: \n" >> release.txt
-          echo -e "#### 后台地址: \`192.168.5.1\`\n" >> release.txt
-          echo -e "#### 后台密码: \`password\`\n" >> release.txt
-          echo "status=success" >> $GITHUB_OUTPUT
-          
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@v2
+        cd openwrt
+        rm -rf build_dir/target-*/host
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 空间使用情况6
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 编译固件
+      id: compile
+      if: steps.cpackage.outputs.status == 'success'
+      run: |
+        cd openwrt
+        echo -e "$(($(nproc)+1)) thread compile"
+        make target/install -j$(nproc) || make target/install -j1 V=s
+        make json_overview_image_info
+        make checksum
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 空间使用情况7
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 上传 bin 目录
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
+
+    - name: 整理文件
+      id: organize
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf *.bin
+        rm -rf *.buildinfo 
+        rm -rf *.json 
+        rm -rf *.manifest 
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 上传固件目录
+      uses: actions/upload-artifact@main
+      if: env.UPLOAD_FIRMWARE == 'true' && steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: 生成发布标签
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+        echo -e "❌ lede主线源码版本，当前是 X86-64 平台\n" >> release.txt
+        echo "release_tag=$(date +"%Y.%m.%d_X86")" >> $GITHUB_OUTPUT
+        echo "status=success" >> $GITHUB_OUTPUT
+    - name: 上传固件到发布
+      uses: softprops/action-gh-release@v2.0.4
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          name: ${{ steps.tag.outputs.release_date }} immortalwrt Linux-6.12
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          body_path: release.txt
-          files: ${{ env.FIRMWARE }}/*
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE }}/*
 
-    - name: Delete workflow runs
+    - name: 删除以前发布的固件
+      uses: dev-drprasad/delete-older-releases@v0.3.3
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 10
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 删除以前的工作流程
       uses: Mattraks/delete-workflow-runs@v2
       with:
-          retain_days: 5
-          keep_minimum_runs: 5
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@v0.3.4
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-          keep_latest: 10
-          delete_tags: true
-      env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Delete Artifacts
-      uses: geekyeggo/delete-artifact@v5
-      with:
-         name: |
-            bin-archive
+        token: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        retain_days: 1
+        keep_minimum_runs: 3
