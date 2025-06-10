@@ -19,8 +19,9 @@ rm -rf ./feeds/luci/applications/luci-app-passwall
 rm -rf ./feeds/luci/applications/luci-app-passwall2
 rm -rf ./feeds/luci/applications/luci-app-openclash
 
+
 #克隆插件
-git clone https://github.com/xiaorouji/openwrt-passwall-packages.git package/pwpage
+git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall-packages.git package/pwpage
 
 
 mkdir package/small
@@ -44,9 +45,6 @@ git clone -b main --depth 1 https://github.com/xiaorouji/openwrt-passwall2.git
 git clone -b master --depth 1 https://github.com/vernesong/OpenClash.git
 #modem
 # git clone -b main --depth 1 https://github.com/FUjr/modem_feeds.git
-#msd_lite
-git clone -b main --depth=1 https://github.com/ximiTech/luci-app-msd_lite.git
-git clone -b main --depth=1 https://github.com/ximiTech/msd_lite.git
 
 
 popd
